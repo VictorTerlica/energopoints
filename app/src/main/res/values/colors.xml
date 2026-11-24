@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Фон адаптивной иконки (тёмно-синий, как в ТЗ). -->
+    <color name="ic_launcher_background">#0D2A5C</color>
+
+    <!-- Фирменный синий. -->
+    <color name="brand_primary">#1565C0</color>
+    <color name="brand_navy">#0D2A5C</color>
+
+    <!-- Фон окна до первого кадра Compose. -->
+    <color name="window_background">#F6F8FB</color>
+</resources>

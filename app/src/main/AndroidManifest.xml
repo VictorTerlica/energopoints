@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Единственное разрешение: нужно только для открытия ссылок на карты
+        во внешнем браузере/приложении. Доступа к файлам и геолокации нет:
+        points.json лежит в приватной внешней папке приложения, а координаты
+        берутся из файла, а не из GPS.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        Android 11+ скрывает установленные приложения, если они не объявлены
+        в queries. Эти записи нужны, чтобы корректно проверять наличие
+        Яндекс.Карт и Google Maps и открывать их.
+    -->
+    <queries>
+        <package android:name="ru.yandex.yandexmaps" />
+        <package android:name="com.google.android.apps.maps" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.EnergyPoints"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
