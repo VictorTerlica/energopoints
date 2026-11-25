@@ -1,4 +1,4 @@
-package com.example.energopoints.data
+package com.energypoints.finder.data
 
 import android.content.Context
 import kotlinx.serialization.json.*
@@ -44,21 +44,16 @@ object PointsRepository {
     }
 
     fun save(context: Context, data: Map<String, Map<String, List<Point>>>) {
-        val rootJson = buildJsonObject {
-            data.forEach { (district, types) ->
-                put(district, buildJsonObject {
-                    types.forEach { (type, points) ->
+        val rootJson = JsonObject(
+            data.mapValues { (_, types) ->
+                JsonObject(
+                    types.mapValues { (type, points) ->
                         val key = if (type == "РП") "рп" else "тп"
-                        put(key, buildJsonArray {
-                            points.forEach { point ->
-                                add(json.encodeToJsonElement(Point.serializer(), point))
-                            }
-                        })
+                        JsonArray(points.map { json.encodeToJsonElement(Point.serializer(), it) })
                     }
-                })
+                )
             }
-        }
-        
+        )
         val file = File(context.getExternalFilesDir(null), "points.json")
         file.writeText(rootJson.toString())
     }
