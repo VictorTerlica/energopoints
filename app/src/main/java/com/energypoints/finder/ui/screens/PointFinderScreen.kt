@@ -3,6 +3,8 @@ package com.energypoints.finder.ui.screens
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -26,17 +28,60 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.energypoints.finder.data.Point
 import com.energypoints.finder.data.PointsRepository
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PointFinderScreen() {
     val context = LocalContext.current
-    // Данные загружаются при старте
     var data by remember { mutableStateOf(PointsRepository.load(context)) }
 
     var selectedDistrict by remember(data) { mutableStateOf(data.keys.firstOrNull() ?: "") }
     var selectedType by remember(data) { mutableStateOf("РП") }
     var query by remember { mutableStateOf("") }
+    var selectedPoint by remember { mutableStateOf<Point?>(null) }
+
+    // Лончер для ВЫБОРА (Импорта) файла
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let {
+            try {
+                // Копируем выбранный файл во внутреннюю папку приложения
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    val destFile = File(context.getExternalFilesDir(null), "points.json")
+                    destFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                // Перезагружаем данные
+                data = PointsRepository.load(context)
+                selectedDistrict = data.keys.firstOrNull() ?: ""
+            } catch (e: Exception) {
+                // Ошибка чтения файла (можно добавить Toast)
+            }
+        }
+    }
+
+    // Лончер для СОХРАНЕНИЯ (Экспорта) файла
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        uri?.let {
+            try {
+                val sourceFile = File(context.getExternalFilesDir(null), "points.json")
+                if (sourceFile.exists()) {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        sourceFile.inputStream().use { input ->
+                            input.copyTo(output)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Ошибка сохранения
+            }
+        }
+    }
 
     val types = data[selectedDistrict]?.keys?.toList() ?: emptyList()
     val points = data[selectedDistrict]?.get(selectedType).orEmpty()
@@ -46,14 +91,23 @@ fun PointFinderScreen() {
             it.code.contains(query.trim(), true) || it.name.contains(query.trim(), true)
         }
     }
-    var selectedPoint by remember { mutableStateOf<Point?>(null) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("ЭнергоТочки", fontWeight = FontWeight.Bold) },
                 actions = {
-                    // Кнопка обновления (перечитывает файл)
+                    // Кнопка импорта
+                    IconButton(onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) }) {
+                        Icon(Icons.Default.Add, contentDescription = "Загрузить JSON")
+                    }
+                    // Кнопка экспорта
+                    if (data.isNotEmpty()) {
+                        IconButton(onClick = { exportLauncher.launch("points_updated.json") }) {
+                            Icon(Icons.Default.Share, contentDescription = "Сохранить/Выгрузить JSON")
+                        }
+                    }
+                    // Кнопка обновления
                     IconButton(onClick = { data = PointsRepository.load(context) }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Обновить")
                     }
@@ -82,17 +136,28 @@ fun PointFinderScreen() {
                     Icon(Icons.Default.Warning, null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.error)
                     Spacer(Modifier.height(16.dp))
                     Text(
-                        "Файл points.json не найден",
+                        "Файл с точками не найден",
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center
                     )
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(8.dp))
                     Text(
-                        "Скопируйте ваш файл points.json по пути:\n\nAndroid/data/com.energypoints.finder/files/\n\nПосле этого нажмите на значок обновления (круглая стрелка) в правом верхнем углу.",
+                        "Нажмите кнопку ниже и выберите ваш points.json в памяти телефона (например, в папке «Загрузки»).\n\nИли скопируйте его вручную по пути: Android/data/com.energypoints.finder/files/",
                         textAlign = TextAlign.Center,
-                        fontSize = 15.sp
+                        fontSize = 15.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(Modifier.height(24.dp))
+                    Button(
+                        onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) },
+                        modifier = Modifier.height(52.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Add, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Выбрать points.json", fontSize = 16.sp)
+                    }
                 }
             } else {
                 // ЭКРАН С ДАННЫМИ
@@ -152,15 +217,12 @@ fun PointFinderScreen() {
                 p = p,
                 onDismiss = { selectedPoint = null },
                 onSave = { updatedPoint ->
-                    // Обновляем в памяти
                     val updatedData = data.toMutableMap().mapValues { (_, typesMap) ->
                         typesMap.mapValues { (_, pointsList) ->
                             pointsList.map { if (it.name == updatedPoint.name && it.latitude == updatedPoint.latitude) updatedPoint else it }
                         }
                     }
-                    // Сохраняем в файл
                     PointsRepository.save(context, updatedData)
-                    // Обновляем интерфейс
                     data = updatedData
                     selectedPoint = updatedPoint
                 }
