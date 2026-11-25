@@ -1,4 +1,4 @@
-package com.example.energopoints.ui.screens
+package com.energypoints.finder.ui.screens
 
 import android.content.Context
 import android.content.Intent
@@ -18,20 +18,18 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.energopoints.data.Point
-import com.example.energopoints.data.PointsRepository
+import com.energypoints.finder.data.Point
+import com.energypoints.finder.data.PointsRepository
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PointFinderScreen() {
     val context = LocalContext.current
-    // ВАЖНО: здесь var, а не val, чтобы обновлять экран при сохранении
     var data by remember { mutableStateOf(PointsRepository.load(context)) }
 
     var selectedDistrict by remember { mutableStateOf(data.keys.firstOrNull() ?: "") }
@@ -85,7 +83,7 @@ fun PointFinderScreen() {
                         onClick = { selectedType = t },
                         label = { Text(t) },
                         leadingIcon = {
-                            Icon(if (t == "РП") Icons.Default.ElectricalServices else Icons.Default.FlashOn, null)
+                            Icon(if (t == "РП") Icons.Default.Home else Icons.Default.Star, null)
                         }
                     )
                 }
@@ -120,16 +118,14 @@ fun PointFinderScreen() {
                 p = p,
                 onDismiss = { selectedPoint = null },
                 onSave = { updatedPoint ->
-                    // Обновляем данные в памяти
                     val updatedData = data.toMutableMap().mapValues { (_, typesMap) ->
                         typesMap.mapValues { (_, pointsList) ->
                             pointsList.map { if (it.name == updatedPoint.name && it.latitude == updatedPoint.latitude) updatedPoint else it }
                         }
                     }
-                    // Сохраняем в файл
                     PointsRepository.save(context, updatedData)
-                    data = updatedData // Обновляем UI
-                    selectedPoint = updatedPoint // Обновляем открытую карточку
+                    data = updatedData
+                    selectedPoint = updatedPoint
                 }
             )
         }
@@ -148,12 +144,12 @@ private fun PointCard(p: Point, onClick: () -> Unit) {
                 Modifier
                     .size(48.dp)
                     .background(
-                        Color(android.graphics.Color.parseColor(p.iconColor)),
+                        try { Color(android.graphics.Color.parseColor(p.iconColor)) } catch (e: Exception) { Color.Blue },
                         RoundedCornerShape(12.dp)
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Default.LocationOn, null, tint = Color.White)
+                Icon(Icons.Default.Place, null, tint = Color.White)
             }
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
@@ -167,7 +163,7 @@ private fun PointCard(p: Point, onClick: () -> Unit) {
                     Text(p.note, fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary)
                 }
             }
-            Icon(Icons.Default.ChevronRight, null)
+            Icon(Icons.Default.KeyboardArrowRight, null)
         }
     }
 }
@@ -191,10 +187,13 @@ private fun PointDetailsSheet(
             
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
-                    Modifier.size(40.dp).background(Color(android.graphics.Color.parseColor(if (isEditing) editColor else p.iconColor)), RoundedCornerShape(10.dp)),
+                    Modifier.size(40.dp).background(
+                        try { Color(android.graphics.Color.parseColor(if (isEditing) editColor else p.iconColor)) } catch (e: Exception) { Color.Blue },
+                        RoundedCornerShape(10.dp)
+                    ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.LocationOn, null, tint = Color.White)
+                    Icon(Icons.Default.Place, null, tint = Color.White)
                 }
                 Spacer(Modifier.width(12.dp))
                 Text(p.name.ifBlank { p.code }, fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -221,7 +220,10 @@ private fun PointDetailsSheet(
                         Box(
                             Modifier
                                 .size(36.dp)
-                                .background(Color(android.graphics.Color.parseColor(hex)), CircleShape)
+                                .background(
+                                    try { Color(android.graphics.Color.parseColor(hex)) } catch (e: Exception) { Color.Blue },
+                                    CircleShape
+                                )
                                 .clickable { editColor = hex },
                             contentAlignment = Alignment.Center
                         ) {
@@ -248,7 +250,7 @@ private fun PointDetailsSheet(
                         },
                         modifier = Modifier.weight(1f)
                     ) {
-                        Icon(Icons.Default.Save, null)
+                        Icon(Icons.Default.Check, null)
                         Spacer(Modifier.width(8.dp))
                         Text("Сохранить")
                     }
@@ -278,7 +280,7 @@ private fun PointDetailsSheet(
 
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = { openYandexMaps(context, p.latitude, p.longitude, p.name) }, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp)) {
-                    Icon(Icons.Default.Map, null)
+                    Icon(Icons.Default.Place, null)
                     Spacer(Modifier.width(8.dp))
                     Text("Открыть в Яндекс.Картах")
                 }
