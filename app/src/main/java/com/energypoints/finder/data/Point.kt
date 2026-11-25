@@ -1,4 +1,4 @@
-package com.example.energopoints.data
+package com.energypoints.finder.data
 
 import kotlinx.serialization.Serializable
 
@@ -12,5 +12,5 @@ data class Point(
     val longitude: Double,
     val note: String = "",
     val ownership: String = "ССК",
-    val iconColor: String = "#1565C0" // Цвет по умолчанию (синий)
+    val iconColor: String = "#1565C0"
 )
