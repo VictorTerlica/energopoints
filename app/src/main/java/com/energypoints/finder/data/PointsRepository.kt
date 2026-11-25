@@ -1,10 +1,7 @@
 package com.example.energopoints.data
 
 import android.content.Context
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.*
 import java.io.File
 
 object PointsRepository {
@@ -16,7 +13,6 @@ object PointsRepository {
         val text = if (file.exists()) {
             file.readText()
         } else {
-            // Если файла нет, пробуем загрузить из assets (если вы его туда положили)
             try { context.assets.open("points.json").bufferedReader().use { it.readText() } } 
             catch (e: Exception) { "{}" }
         }
@@ -47,15 +43,21 @@ object PointsRepository {
         return result
     }
 
-    // Новая функция сохранения
     fun save(context: Context, data: Map<String, Map<String, List<Point>>>) {
-        // Преобразуем обратно в структуру JSON
-        val rootJson = JsonObject(data.mapValues { (_, types) ->
-            JsonObject(types.mapValues { (type, points) ->
-                val key = if (type == "РП") "рп" else "тп"
-                json.encodeToJsonElement(points).jsonArray
-            })
-        })
+        val rootJson = buildJsonObject {
+            data.forEach { (district, types) ->
+                put(district, buildJsonObject {
+                    types.forEach { (type, points) ->
+                        val key = if (type == "РП") "рп" else "тп"
+                        put(key, buildJsonArray {
+                            points.forEach { point ->
+                                add(json.encodeToJsonElement(Point.serializer(), point))
+                            }
+                        })
+                    }
+                })
+            }
+        }
         
         val file = File(context.getExternalFilesDir(null), "points.json")
         file.writeText(rootJson.toString())
