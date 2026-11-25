@@ -321,15 +321,25 @@ fun PointFinderScreen(viewModel: PointFinderViewModel = viewModel()) {
         }
     }
 
-    selectedPoint?.let { point ->
-        PointDetailsSheet(
-            point = point,
-            note = notes[point.noteKey],
-            onDismiss = { selectedPointId = null },
-            onSaveNote = { text -> viewModel.saveNote(point, text) },
-            onDeleteNote = { viewModel.deleteNote(point) }
-        )
-    }
+  selectedPoint?.let { p ->
+    PointDetailsSheet(
+        p = p,
+        rossetiCodes = rossetiCodes,
+        onDismiss = { selectedPoint = null },
+        onSave = { updatedPoint ->
+            // Обновляем список в памяти и сохраняем в файл
+            val updatedData = data.toMutableMap().mapValues { (_, types) ->
+                types.mapValues { (_, points) ->
+                    points.map { if (it.name == updatedPoint.name && it.latitude == updatedPoint.latitude) updatedPoint else it }
+                }
+            }
+            PointsRepository.save(context, updatedData)
+            selectedPoint = updatedPoint // Обновляем открытую карточку
+            // Обновляем основной список на экране
+            // (потребуется сделать data изменяемой переменной var data by remember...)
+        }
+    )
+}
 
     if (showInstructions) {
         DataInstructionsDialog(
@@ -1380,144 +1390,140 @@ private fun DataInstructionsDialog(
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PointDetailsSheet(
-    point: Point,
-    note: String?,
+    p: Point,
+    rossetiCodes: Set<String>,
     onDismiss: () -> Unit,
-    onSaveNote: (String) -> Unit,
-    onDeleteNote: () -> Unit
+    onSave: (Point) -> Unit // Коллбэк для сохранения
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var editing by rememberSaveable(point.id) { mutableStateOf(false) }
-    var draft by rememberSaveable(point.id) { mutableStateOf(note.orEmpty()) }
+    val context = LocalContext.current
+    var isEditing by remember { mutableStateOf(false) }
+    
+    // Локальный стейт для редактирования
+    var editOwnership by remember { mutableStateOf(p.ownership) }
+    var editColor by remember { mutableStateOf(p.iconColor) }
+    var editNote by remember { mutableStateOf(p.note) }
 
-    LaunchedEffect(note, editing) {
-        if (!editing) {
-            draft = note.orEmpty()
-        }
-    }
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
-        dragHandle = { BottomSheetDefaults.DragHandle() }
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .imePadding()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp)
-        ) {
-            Row(verticalAlignment = Alignment.Top) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(24.dp).verticalScroll(rememberScrollState())) {
+            
+            // Заголовок
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
-                    modifier = Modifier
-                        .size(52.dp)
-                        .clip(RoundedCornerShape(15.dp))
-                        .background(pointGradient(point)),
+                    Modifier.size(40.dp).background(Color(android.graphics.Color.parseColor(if (isEditing) editColor else p.iconColor)), RoundedCornerShape(10.dp)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = BoltIcon,
-                        contentDescription = null,
-                        tint = boltTint(point),
-                        modifier = Modifier.size(30.dp)
-                    )
+                    Icon(Icons.Default.LocationOn, null, tint = Color.White)
+                }
+                Spacer(Modifier.width(12.dp))
+                Text(p.name, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("${p.district} • ${p.type}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            Spacer(Modifier.height(16.dp))
+
+            if (isEditing) {
+                // --- РЕЖИМ РЕДАКТИРОВАНИЯ ---
+                Text("Принадлежность", fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = editOwnership == "РОССЕТИ", onClick = { editOwnership = "РОССЕТИ" }, label = { Text("РОССЕТИ") })
+                    FilterChip(selected = editOwnership == "ССК", onClick = { editOwnership = "ССК" }, label = { Text("ССК") })
                 }
 
-                Spacer(modifier = Modifier.width(14.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = point.displayName,
-                        style = MaterialTheme.typography.headlineSmall,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (!point.ownership.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(5.dp))
-                        OwnershipBadge(ownership = point.ownership)
+                Spacer(Modifier.height(16.dp))
+                Text("Цвет иконки", fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 8.dp)) {
+                    // Предустановленные цвета
+                    val colors = listOf("#F44336", "#2196F3", "#4CAF50", "#FF9800", "#9C27B0", "#607D8B")
+                    colors.forEach { hex ->
+                        Box(
+                            Modifier
+                                .size(36.dp)
+                                .background(Color(android.graphics.Color.parseColor(hex)), RoundedCornerShape(50))
+                                .clickable { editColor = hex },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (editColor == hex) {
+                                Icon(Icons.Default.Check, null, tint = Color.White)
+                            }
+                        }
                     }
                 }
 
-                IconButton(onClick = onDismiss) {
-                    Icon(
-                        imageVector = Icons.Filled.Close,
-                        contentDescription = "Закрыть"
-                    )
+                Spacer(Modifier.height(16.dp))
+                Text("Примечание", fontWeight = FontWeight.SemiBold)
+                OutlinedTextField(
+                    value = editNote,
+                    onValueChange = { editNote = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    minLines = 2
+                )
+
+                Spacer(Modifier.height(20.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            val updatedPoint = p.copy(
+                                ownership = editOwnership,
+                                iconColor = editColor,
+                                note = editNote
+                            )
+                            onSave(updatedPoint)
+                            isEditing = false
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Save, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Сохранить в JSON")
+                    }
+                    OutlinedButton(onClick = { isEditing = false }) {
+                        Text("Отмена")
+                    }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            } else {
+                // --- РЕЖИМ ПРОСМОТРА ---
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Принадлежность: ", fontWeight = FontWeight.SemiBold)
+                    OwnershipBadge(p.ownership == "РОССЕТИ")
+                }
 
-            Text(
-                text = "${point.district} • ${point.typeLabel}",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+                if (p.note.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("📝 ${p.note}", fontSize = 14.sp)
+                }
 
-            if (!point.note.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(Modifier.height(16.dp))
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Text(
-                            text = "Примечание",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = point.note.orEmpty(),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Координаты", fontWeight = FontWeight.SemiBold)
+                        Text("Широта:  ${p.latitude}", fontSize = 15.sp)
+                        Text("Долгота: ${p.longitude}", fontSize = 15.sp)
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            CoordinatesCard(point = point)
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            MyNoteCard(
-                note = note,
-                editing = editing,
-                draft = draft,
-                onDraftChange = { draft = it },
-                onStartEdit = {
-                    draft = note.orEmpty()
-                    editing = true
-                },
-                onSave = {
-                    onSaveNote(draft)
-                    editing = false
-                },
-                onCancel = {
-                    draft = note.orEmpty()
-                    editing = false
-                },
-                onDelete = {
-                    onDeleteNote()
-                    draft = ""
-                    editing = false
+                Spacer(Modifier.height(20.dp))
+                OutlinedButton(onClick = { isEditing = true }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                    Icon(Icons.Default.Edit, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Редактировать данные")
                 }
-            )
 
-            Spacer(modifier = Modifier.height(18.dp))
-
-            MapButtons(point = point)
-
-            Spacer(modifier = Modifier.height(8.dp))
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = { openYandexMaps(context, p.latitude, p.longitude, p.name) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                    Icon(Icons.Default.Map, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Открыть в Яндекс.Картах")
+                }
+            }
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
