@@ -66,6 +66,18 @@ class NotesRepository(private val context: Context) {
         }
     }
 
+    /** Переносит заметку при изменении района/типа/кода точки. */
+    suspend fun moveNote(oldKey: String, newKey: String) {
+        if (oldKey == newKey) return
+        context.notesDataStore.edit { preferences ->
+            val text = preferences[stringPreferencesKey(oldKey)]
+            if (text != null) {
+                preferences.remove(stringPreferencesKey(oldKey))
+                preferences[stringPreferencesKey(newKey)] = text
+            }
+        }
+    }
+
     companion object {
         const val NOTE_PREFIX = "note_"
     }

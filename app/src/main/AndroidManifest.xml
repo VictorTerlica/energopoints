@@ -2,28 +2,28 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
-        Единственное разрешение: нужно только для открытия ссылок на карты
-        во внешнем браузере/приложении. Доступа к файлам и геолокации нет:
-        points.json лежит в приватной внешней папке приложения, а координаты
-        берутся из файла, а не из GPS.
+        INTERNET — только для открытия неявного geo:-интента во внешнем
+        картографическом приложении. Файлы читаются/пишутся через SAF,
+        разрешения на хранилище не нужны.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
-        Android 11+ скрывает установленные приложения, если они не объявлены
-        в queries. Эти записи нужны, чтобы корректно проверять наличие
-        Яндекс.Карт и Google Maps и открывать их.
+        Геолокация нужна только по нажатию «Уточнить по GPS» в форме точки.
+        FINE — точные координаты, COARSE — приблизительные (Android 12+
+        разрешает пользователю выбрать «Примерно»).
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!--
+        Неявный geo:-интент открывает картографическое приложение по умолчанию
+        (Яндекс, Google, 2ГИС и т.д.). Пакетные queries не нужны.
     -->
     <queries>
-        <package android:name="ru.yandex.yandexmaps" />
-        <package android:name="com.google.android.apps.maps" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="geo" />
-        </intent>
-        <intent>
-            <action android:name="android.intent.action.VIEW" />
-            <data android:scheme="https" />
         </intent>
     </queries>
 
