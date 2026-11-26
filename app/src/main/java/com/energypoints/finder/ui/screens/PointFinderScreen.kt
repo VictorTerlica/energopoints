@@ -110,13 +110,36 @@ fun PointFinderScreen(viewModel: PointFinderViewModel = viewModel()) {
     var menuExpanded by remember { mutableStateOf(false) }
     var showImportConfirm by remember { mutableStateOf(false) }
 
-    val importLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            viewModel.importPoints(uri)
+   val importLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.OpenDocument()
+) { uri: Uri? ->
+    uri?.let {
+        try {
+            // 1. Читаем выбранный файл
+            val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                ?: throw Exception("Не удалось прочитать файл")
+            
+            // 2. Парсим JSON (если метод parseJson в репозитории есть, используйте его)
+            // Если нет — используйте PointsRepository.loadFromText(text) или простой парсер.
+            val newData = PointsRepository.parseJson(text) 
+            
+            // 3. СРАЗУ СОХРАНЯЕМ в память (без блокирующих проверок)
+            data = newData
+            
+            // 4. Перезаписываем файл на телефоне
+            PointsRepository.save(context, newData)
+            
+            // 5. Просто показываем сообщение, что всё загружено (ошибки проигнорированы)
+            val count = newData.values.sumOf { it.values.sumOf { list -> list.size } }
+            // Если у вас есть snackbarHostState, раскомментируйте строку ниже:
+            // snackbarHostState.showSnackbar("Импортировано точек: $count")
+
+        } catch (e: Exception) {
+            // Если файл вообще не читается (битый JSON), покажем ошибку
+            // snackbarHostState.showSnackbar("Ошибка чтения: ${e.message}")
         }
     }
+}
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
