@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -64,8 +65,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -101,6 +104,16 @@ import com.energypoints.finder.ui.theme.BrandBlue
 import kotlinx.coroutines.flow.collect
 import java.io.File
 
+private const val TYPE_RP_MASK = 1
+private const val TYPE_TP_MASK = 2
+private const val TYPE_PS_MASK = 4
+private const val ALL_TYPE_MASK = TYPE_RP_MASK or TYPE_TP_MASK or TYPE_PS_MASK
+
+private fun toggleTypeMask(mask: Int, bit: Int): Int {
+    val next = mask xor bit
+    return if (next == 0) ALL_TYPE_MASK else next
+}
+
 @Composable
 fun PointFinderScreen(viewModel: PointFinderViewModel = viewModel()) {
     val context = LocalContext.current
@@ -110,36 +123,13 @@ fun PointFinderScreen(viewModel: PointFinderViewModel = viewModel()) {
     var menuExpanded by remember { mutableStateOf(false) }
     var showImportConfirm by remember { mutableStateOf(false) }
 
-   val importLauncher = rememberLauncherForActivityResult(
-    contract = ActivityResultContracts.OpenDocument()
-) { uri: Uri? ->
-    uri?.let {
-        try {
-            // 1. Читаем выбранный файл
-            val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                ?: throw Exception("Не удалось прочитать файл")
-            
-            // 2. Парсим JSON (если метод parseJson в репозитории есть, используйте его)
-            // Если нет — используйте PointsRepository.loadFromText(text) или простой парсер.
-            val newData = PointsRepository.parseJson(text) 
-            
-            // 3. СРАЗУ СОХРАНЯЕМ в память (без блокирующих проверок)
-            data = newData
-            
-            // 4. Перезаписываем файл на телефоне
-            PointsRepository.save(context, newData)
-            
-            // 5. Просто показываем сообщение, что всё загружено (ошибки проигнорированы)
-            val count = newData.values.sumOf { it.values.sumOf { list -> list.size } }
-            // Если у вас есть snackbarHostState, раскомментируйте строку ниже:
-            // snackbarHostState.showSnackbar("Импортировано точек: $count")
-
-        } catch (e: Exception) {
-            // Если файл вообще не читается (битый JSON), покажем ошибку
-            // snackbarHostState.showSnackbar("Ошибка чтения: ${e.message}")
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importPoints(uri)
         }
     }
-}
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
@@ -204,7 +194,19 @@ fun PointFinderScreen(viewModel: PointFinderViewModel = viewModel()) {
 
     LaunchedEffect(Unit) {
         viewModel.messages.collect { message ->
-            snackbarHostState.showSnackbar(message)
+            val result = snackbarHostState.showSnackbar(
+                message = message.text,
+                actionLabel = if (message.showIssuesAction) "Показать" else null,
+                withDismissAction = message.showIssuesAction,
+                duration = if (message.showIssuesAction) {
+                    SnackbarDuration.Long
+                } else {
+                    SnackbarDuration.Short
+                }
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                viewModel.openIssues()
+            }
         }
     }
 
@@ -227,53 +229,66 @@ fun PointFinderScreen(viewModel: PointFinderViewModel = viewModel()) {
             }
         }
     ) { innerPadding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            val missing = state.missing
-            val fatalError = state.fatalError
-
-            when {
-                state.isLoading -> LoadingContent()
-
-                fatalError != null -> ErrorContent(
-                    message = fatalError,
-                    onRetry = viewModel::loadPoints,
-                    onImport = requestImport,
-                    onAdd = { viewModel.startAddPoint() }
-                )
-
-                missing != null -> MissingContent(
-                    missing = missing,
-                    onImport = requestImport,
-                    onAdd = { viewModel.startAddPoint() },
-                    onOpenFolder = {
-                        openDataFolder(context, viewModel.dataDirectoryPath())
-                    },
-                    onRetry = viewModel::loadPoints,
-                    onDemo = viewModel::loadDemo
-                )
-
-                else -> PointsContent(
-                    points = state.points,
-                    notes = notes,
-                    source = state.source,
-                    onPointClick = viewModel::selectPoint,
-                    onAddPoint = { district, type ->
-                        viewModel.startAddPoint(district, type)
-                    },
-                    onImport = requestImport
+            if (state.issues.isNotEmpty()) {
+                IssuesBanner(
+                    count = state.issues.size,
+                    onClick = viewModel::openIssues
                 )
             }
 
-            if (state.isSaving) {
-                LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.TopCenter)
-                )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                val missing = state.missing
+                val fatalError = state.fatalError
+
+                when {
+                    state.isLoading -> LoadingContent()
+
+                    fatalError != null -> ErrorContent(
+                        message = fatalError,
+                        onRetry = viewModel::loadPoints,
+                        onImport = requestImport,
+                        onAdd = { viewModel.startAddPoint() }
+                    )
+
+                    missing != null -> MissingContent(
+                        missing = missing,
+                        onImport = requestImport,
+                        onAdd = { viewModel.startAddPoint() },
+                        onOpenFolder = {
+                            openDataFolder(context, viewModel.dataDirectoryPath())
+                        },
+                        onRetry = viewModel::loadPoints,
+                        onDemo = viewModel::loadDemo
+                    )
+
+                    else -> PointsContent(
+                        points = state.points,
+                        notes = notes,
+                        source = state.source,
+                        onPointClick = viewModel::selectPoint,
+                        onAddPoint = { district, type ->
+                            viewModel.startAddPoint(district, type)
+                        },
+                        onImport = requestImport
+                    )
+                }
+
+                if (state.isSaving) {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.TopCenter)
+                    )
+                }
             }
         }
     }
@@ -354,10 +369,12 @@ fun PointFinderScreen(viewModel: PointFinderViewModel = viewModel()) {
         )
     }
 
-    IssuesDialog(
-        issues = state.issues,
-        onDismiss = viewModel::dismissIssues
-    )
+    if (state.issuesVisible && state.issues.isNotEmpty()) {
+        IssuesDialog(
+            issues = state.issues,
+            onDismiss = viewModel::dismissIssues
+        )
+    }
 }
 
 @Composable
@@ -379,7 +396,7 @@ private fun EnergyPointsTopBar(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "РП и ТП по координатам",
+                    text = "РП, ТП и ПС по координатам",
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White.copy(alpha = 0.82f),
                     maxLines = 1,
@@ -435,6 +452,31 @@ private fun EnergyPointsTopBar(
 }
 
 @Composable
+private fun IssuesBanner(
+    count: Int,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.End
+    ) {
+        AssistChip(
+            onClick = onClick,
+            label = { Text("Замечания: $count") },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        )
+    }
+}
+
+@Composable
 private fun PointsContent(
     points: List<Point>,
     notes: Map<String, String>,
@@ -453,9 +495,12 @@ private fun PointsContent(
 
     var selectedDistrict by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
-    var rpEnabled by rememberSaveable { mutableStateOf(true) }
-    var tpEnabled by rememberSaveable { mutableStateOf(true) }
+    var selectedTypes by rememberSaveable { mutableStateOf(ALL_TYPE_MASK) }
     val focusManager = LocalFocusManager.current
+
+    val rpEnabled = (selectedTypes and TYPE_RP_MASK) != 0
+    val tpEnabled = (selectedTypes and TYPE_TP_MASK) != 0
+    val psEnabled = (selectedTypes and TYPE_PS_MASK) != 0
 
     val districtNames = remember(points) {
         points.map { it.district }
@@ -469,14 +514,15 @@ private fun PointsContent(
         }
     }
 
-    val filtered = remember(points, selectedDistrict, query, rpEnabled, tpEnabled) {
+    val filtered = remember(points, selectedDistrict, query, selectedTypes) {
         val normalizedQuery = query.trim()
         points.filter { point ->
             val districtMatches = selectedDistrict == null ||
                 point.district == selectedDistrict
             val typeMatches = when (point.type) {
-                "рп" -> rpEnabled
-                "тп" -> tpEnabled
+                "рп" -> (selectedTypes and TYPE_RP_MASK) != 0
+                "тп" -> (selectedTypes and TYPE_TP_MASK) != 0
+                "пс" -> (selectedTypes and TYPE_PS_MASK) != 0
                 else -> true
             }
             val queryMatches = normalizedQuery.isEmpty() ||
@@ -489,14 +535,12 @@ private fun PointsContent(
     val resetFilters: () -> Unit = {
         selectedDistrict = null
         query = ""
-        rpEnabled = true
-        tpEnabled = true
+        selectedTypes = ALL_TYPE_MASK
     }
 
     val filtersActive = selectedDistrict != null ||
         query.isNotBlank() ||
-        !rpEnabled ||
-        !tpEnabled
+        selectedTypes != ALL_TYPE_MASK
 
     Column(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -517,14 +561,7 @@ private fun PointsContent(
                 FilterChip(
                     selected = rpEnabled,
                     onClick = {
-                        when {
-                            rpEnabled && tpEnabled -> rpEnabled = false
-                            rpEnabled && !tpEnabled -> {
-                                rpEnabled = true
-                                tpEnabled = true
-                            }
-                            else -> rpEnabled = true
-                        }
+                        selectedTypes = toggleTypeMask(selectedTypes, TYPE_RP_MASK)
                     },
                     label = { Text("РП") }
                 )
@@ -532,16 +569,17 @@ private fun PointsContent(
                 FilterChip(
                     selected = tpEnabled,
                     onClick = {
-                        when {
-                            rpEnabled && tpEnabled -> tpEnabled = false
-                            tpEnabled && !rpEnabled -> {
-                                rpEnabled = true
-                                tpEnabled = true
-                            }
-                            else -> tpEnabled = true
-                        }
+                        selectedTypes = toggleTypeMask(selectedTypes, TYPE_TP_MASK)
                     },
                     label = { Text("ТП") }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                FilterChip(
+                    selected = psEnabled,
+                    onClick = {
+                        selectedTypes = toggleTypeMask(selectedTypes, TYPE_PS_MASK)
+                    },
+                    label = { Text("ПС") }
                 )
                 Spacer(modifier = Modifier.weight(1f))
                 if (filtersActive) {

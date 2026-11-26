@@ -7,7 +7,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.ExperimentalSerializationApi
-import kotlinx.serialization.MissingFieldException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -19,7 +18,6 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.decodeFromJsonElement
 import java.io.File
 import java.util.Locale
 
@@ -206,13 +204,6 @@ class PointsRepository(private val context: Context) {
         }
 
     fun serialize(points: List<Point>): String {
-        require(points.all { it.type in POINT_TYPES }) {
-            "Нельзя сохранить точку с неизвестным типом."
-        }
-        require(points.all { it.district.isNotBlank() }) {
-            "Нельзя сохранить точку без района."
-        }
-
         val grouped = LinkedHashMap<String, MutableList<Point>>()
         for (point in points) {
             grouped.getOrPut(point.district) { mutableListOf() }.add(point)
@@ -221,8 +212,11 @@ class PointsRepository(private val context: Context) {
         val root = LinkedHashMap<String, DistrictBlock>()
         for ((district, districtPoints) in grouped) {
             root[district] = DistrictBlock(
-                rp = districtPoints.filter { it.type == "рп" },
-                tp = districtPoints.filter { it.type == "тп" }
+                // Неизвестные типы сохраняем в «рп»-массиве: поле type не теряется,
+                // а проверка покажет информационное замечание.
+                rp = districtPoints.filter { it.type != "тп" && it.type != "пс" },
+                tp = districtPoints.filter { it.type == "тп" },
+                ps = districtPoints.filter { it.type == "пс" }
             )
         }
         return json.encodeToString<Map<String, DistrictBlock>>(root)
@@ -269,7 +263,7 @@ class PointsRepository(private val context: Context) {
         val root = rootElement as? JsonObject
             ?: throw PointsParseException(
                 "Корень JSON должен быть объектом вида " +
-                    "{ \"Район\": { \"рп\": [ ... ], \"тп\": [ ... ] } }."
+                    "{ \"Район\": { \"рп\": [ ... ], \"тп\": [ ... ], \"пс\": [ ... ] } }."
             )
 
         val points = mutableListOf<Point>()
@@ -278,8 +272,7 @@ class PointsRepository(private val context: Context) {
         for ((rawDistrict, element) in root) {
             val district = rawDistrict.trim()
             if (district.isEmpty()) {
-                issues += "Пропущен район с пустым именем."
-                continue
+                issues += "Район с пустым именем: точки прочитаны, район нужно заполнить."
             }
             val districtObject = element as? JsonObject
             if (districtObject == null) {
@@ -289,13 +282,15 @@ class PointsRepository(private val context: Context) {
 
             val rpElement = districtObject.arrayFor("рп", "rp")
             val tpElement = districtObject.arrayFor("тп", "tp")
-            if (rpElement == null && tpElement == null) {
-                issues += "Район «$district»: нет массивов «рп» или «тп»."
+            val psElement = districtObject.arrayFor("пс", "ps")
+            if (rpElement == null && tpElement == null && psElement == null) {
+                issues += "Район «$district»: нет массивов «рп», «тп» или «пс»."
                 continue
             }
 
             decodeArray(rpElement, "рп", district, points, issues)
             decodeArray(tpElement, "тп", district, points, issues)
+            decodeArray(psElement, "пс", district, points, issues)
         }
 
         return ParsedPoints(points = points, issues = issues)
@@ -316,30 +311,74 @@ class PointsRepository(private val context: Context) {
         }
 
         for (item in array) {
-            val rawCode = ((item as? JsonObject)?.get("code") as? JsonPrimitive)
-                ?.contentOrNull
-                ?.trim()
-                .orEmpty()
-            val label = rawCode.ifBlank { "(без кода)" }
-            try {
-                val decoded = json.decodeFromJsonElement<Point>(item)
-                val type = normalizeType(decoded.type.ifBlank { fallbackType })
-                target += decoded.copy(
-                    code = decoded.code.trim(),
-                    name = decoded.name.trim(),
-                    district = district,
-                    type = type,
-                    note = decoded.note?.trim()?.takeIf { it.isNotEmpty() },
-                    ownership = normalizeOwnership(decoded.ownership),
-                    iconColor = PointColors.normalize(
-                        decoded.iconColor,
-                        PointColors.defaultFor(type)
-                    )
-                )
-            } catch (e: Exception) {
-                issues += "Район «$district»: точка $label — ${describeDecodeError(e)}"
+            val obj = item as? JsonObject
+            if (obj == null) {
+                issues += "Район «$district»: элемент в «$fallbackType» не объект, пропущен."
+                continue
             }
+
+            val code = obj.stringValue("code").orEmpty()
+            val label = code.ifBlank { "(без кода)" }
+            val type = normalizeType(
+                obj.stringValue("type").orEmpty().ifBlank { fallbackType }
+            )
+            val name = obj.stringValue("name").orEmpty()
+            val latitude = obj.coordinateValue(
+                name = "latitude",
+                coordinateLabel = "широта",
+                district = district,
+                pointLabel = label,
+                issues = issues
+            )
+            val longitude = obj.coordinateValue(
+                name = "longitude",
+                coordinateLabel = "долгота",
+                district = district,
+                pointLabel = label,
+                issues = issues
+            )
+
+            target += Point(
+                code = code,
+                name = name,
+                district = district,
+                type = type,
+                latitude = latitude,
+                longitude = longitude,
+                note = obj.stringValue("note"),
+                ownership = normalizeOwnership(obj.stringValue("ownership")),
+                iconColor = PointColors.normalize(
+                    obj.stringValue("iconColor"),
+                    PointColors.defaultFor(type)
+                )
+            )
         }
+    }
+
+    private fun JsonObject.stringValue(name: String): String? =
+        (get(name) as? JsonPrimitive)
+            ?.contentOrNull
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+    private fun JsonObject.coordinateValue(
+        name: String,
+        coordinateLabel: String,
+        district: String,
+        pointLabel: String,
+        issues: MutableList<String>
+    ): Double {
+        val raw = (get(name) as? JsonPrimitive)?.contentOrNull?.trim()
+        if (raw.isNullOrBlank()) {
+            issues += "Район «$district»: $pointLabel — $coordinateLabel не заполнена, сохранено 0.0."
+            return 0.0
+        }
+        val value = raw.replace(',', '.').toDoubleOrNull()
+        if (value == null || !value.isFinite()) {
+            issues += "Район «$district»: $pointLabel — $coordinateLabel «$raw» не число, сохранено 0.0."
+            return 0.0
+        }
+        return value
     }
 
     private fun JsonObject.arrayFor(vararg names: String): JsonElement? {
@@ -355,6 +394,7 @@ class PointsRepository(private val context: Context) {
         when (value.trim().lowercase(Locale.ROOT)) {
             "рп", "rp" -> "рп"
             "тп", "tp" -> "тп"
+            "пс", "ps" -> "пс"
             else -> value.trim().lowercase(Locale.ROOT)
         }
 
@@ -369,14 +409,6 @@ class PointsRepository(private val context: Context) {
         }
     }
 
-    private fun describeDecodeError(error: Exception): String {
-        return when (error) {
-            is MissingFieldException -> "не заполнены координаты"
-            is SerializationException -> error.message ?: "некорректные данные"
-            else -> error.message ?: "некорректные данные"
-        }
-    }
-
     private fun assetExists(name: String): Boolean =
         runCatching { context.assets.open(name).close() }.isSuccess
 
@@ -388,7 +420,8 @@ class PointsRepository(private val context: Context) {
     @Serializable
     private data class DistrictBlock(
         @SerialName("рп") val rp: List<Point> = emptyList(),
-        @SerialName("тп") val tp: List<Point> = emptyList()
+        @SerialName("тп") val tp: List<Point> = emptyList(),
+        @SerialName("пс") val ps: List<Point> = emptyList()
     )
 
     private companion object {

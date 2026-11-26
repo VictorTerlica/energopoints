@@ -661,6 +661,22 @@ private fun EditorContent(
                 enabled = !isSaving,
                 label = { Text("ТП") }
             )
+            FilterChip(
+                selected = draft.type == "пс",
+                onClick = {
+                    if (draft.type != "пс") {
+                        val oldDefault = PointColors.defaultFor(draft.type)
+                        val color = if (draft.iconColor == oldDefault) {
+                            PointColors.defaultFor("пс")
+                        } else {
+                            draft.iconColor
+                        }
+                        onDraftChange(draft.copy(type = "пс", iconColor = color))
+                    }
+                },
+                enabled = !isSaving,
+                label = { Text("ПС") }
+            )
         }
 
         Spacer(modifier = Modifier.height(14.dp))

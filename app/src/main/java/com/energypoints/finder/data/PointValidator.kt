@@ -3,13 +3,14 @@ package com.energypoints.finder.data
 import java.util.Locale
 
 /**
- * Проверка списка точек перед сохранением/импортом/экспортом.
+ * Информационная проверка списка точек.
  *
- * Возвращает готовые строки для AlertDialog. Проверяются:
- *  - обязательные поля (code, name, district, type);
- *  - допустимый тип (РП/ТП);
- *  - диапазоны координат;
- *  - дубликаты по связке code + district + type.
+ * Ничего не блокирует: результат используется только для баннера/уведомления
+ * «Замечания: N», по нажатию на который открывается список.
+ *
+ * Дубликат — это полное совпадение code + district + type + name.
+ * Одинаковый номер с разными названиями дубликатом не считается.
+ * ПС — равноправный тип объекта наряду с РП и ТП.
  */
 object PointValidator {
 
@@ -45,32 +46,32 @@ object PointValidator {
                 badCoordinates += "$label: долгота ${point.longitude}"
             }
 
-            val key = listOf(point.code, point.district, point.type)
+            // Название входит в ключ: одинаковый номер с разным именем — не дубликат.
+            val key = listOf(point.code, point.district, point.type, point.name)
                 .joinToString("|") { it.trim().lowercase(Locale.ROOT) }
             if (seen.containsKey(key)) {
-                duplicates += "$label ($districtLabel)"
+                duplicates += "$label «${point.name.ifBlank { "без названия" }}»"
             } else {
                 seen[key] = point
             }
         }
 
-        val errors = mutableListOf<String>()
+        val issues = mutableListOf<String>()
         if (duplicates.isNotEmpty()) {
-            errors += "Ошибка: найдены дубликаты: " +
-                duplicates.distinct().joinToString(", ")
+            issues += "Дубликаты: " + duplicates.distinct().joinToString(", ")
         }
         if (missingFields.isNotEmpty()) {
-            errors += "Ошибка: не заполнены обязательные поля: " +
+            issues += "Не заполнены обязательные поля: " +
                 missingFields.distinct().joinToString("; ")
         }
         if (badCoordinates.isNotEmpty()) {
-            errors += "Ошибка: неверные координаты: " +
+            issues += "Неверные координаты: " +
                 badCoordinates.distinct().joinToString("; ")
         }
         if (badTypes.isNotEmpty()) {
-            errors += "Ошибка: неверный тип (нужно РП или ТП): " +
+            issues += "Неизвестный тип (нужно РП, ТП или ПС): " +
                 badTypes.distinct().joinToString(", ")
         }
-        return errors
+        return issues
     }
 }

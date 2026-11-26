@@ -34,6 +34,11 @@ data class MissingInfo(
     val demoAvailable: Boolean
 )
 
+data class UiMessage(
+    val text: String,
+    val showIssuesAction: Boolean = false
+)
+
 data class PointFinderUiState(
     val isLoading: Boolean = true,
     val points: List<Point> = emptyList(),
@@ -41,6 +46,7 @@ data class PointFinderUiState(
     val missing: MissingInfo? = null,
     val fatalError: String? = null,
     val issues: List<String> = emptyList(),
+    val issuesVisible: Boolean = false,
     val sheet: PointSheetState? = null,
     val deleteTarget: Point? = null,
     val isSaving: Boolean = false,
@@ -96,8 +102,8 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
     private val _state = MutableStateFlow(PointFinderUiState())
     val state: StateFlow<PointFinderUiState> = _state.asStateFlow()
 
-    private val _messages = Channel<String>(Channel.BUFFERED)
-    val messages: Flow<String> = _messages.receiveAsFlow()
+    private val _messages = Channel<UiMessage>(Channel.BUFFERED)
+    val messages: Flow<UiMessage> = _messages.receiveAsFlow()
 
     val notes: StateFlow<Map<String, String>> = notesRepository.notes
         .stateIn(
@@ -112,6 +118,20 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
         loadPoints()
     }
 
+    private fun sendMessage(text: String, showIssuesAction: Boolean = false) {
+        _messages.trySend(UiMessage(text, showIssuesAction))
+    }
+
+    private fun notifyIssues(issues: List<String>, prefix: String? = null) {
+        if (issues.isEmpty()) return
+        val text = if (prefix.isNullOrBlank()) {
+            "Проверка данных: замечаний ${issues.size}"
+        } else {
+            "$prefix. Замечаний: ${issues.size}"
+        }
+        sendMessage(text, showIssuesAction = true)
+    }
+
     fun loadPoints() {
         if (_state.value.isSaving) return
         loadJob?.cancel()
@@ -122,11 +142,15 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
                     fatalError = null,
                     missing = null,
                     issues = emptyList(),
+                    issuesVisible = false,
                     deleteTarget = null
                 )
             }
             when (val outcome = repository.load()) {
-                is LoadOutcome.Success -> applyLoaded(outcome)
+                is LoadOutcome.Success -> {
+                    val issues = applyLoaded(outcome)
+                    notifyIssues(issues)
+                }
 
                 is LoadOutcome.Missing -> _state.update {
                     it.copy(
@@ -138,19 +162,27 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
                             demoAvailable = outcome.demoAvailable
                         ),
                         fatalError = null,
+                        issues = emptyList(),
+                        issuesVisible = false,
                         sheet = null
                     )
                 }
 
-                is LoadOutcome.Error -> _state.update {
-                    it.copy(
-                        isLoading = false,
-                        points = emptyList(),
-                        source = null,
-                        missing = null,
-                        fatalError = outcome.message,
-                        sheet = null
-                    )
+                is LoadOutcome.Error -> {
+                    val issues = listOf(outcome.message)
+                    _state.update {
+                        it.copy(
+                            isLoading = false,
+                            points = emptyList(),
+                            source = null,
+                            missing = null,
+                            fatalError = outcome.message,
+                            issues = issues,
+                            issuesVisible = false,
+                            sheet = null
+                        )
+                    }
+                    notifyIssues(issues)
                 }
             }
         }
@@ -166,35 +198,52 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
                     fatalError = null,
                     missing = null,
                     issues = emptyList(),
+                    issuesVisible = false,
                     deleteTarget = null
                 )
             }
             when (val outcome = repository.loadDemo()) {
                 is LoadOutcome.Success -> {
-                    applyLoaded(outcome)
-                    _messages.trySend("Демо-данные загружены")
+                    val issues = applyLoaded(outcome)
+                    if (issues.isEmpty()) {
+                        sendMessage("Демо-данные загружены")
+                    } else {
+                        notifyIssues(issues)
+                    }
                 }
 
-                is LoadOutcome.Missing -> _state.update {
-                    it.copy(
-                        isLoading = false,
-                        fatalError = "Демо-файл не найден.",
-                        sheet = null
-                    )
+                is LoadOutcome.Missing -> {
+                    val issues = listOf("Демо-файл не найден.")
+                    _state.update {
+                        it.copy(
+                            isLoading = false,
+                            fatalError = issues.first(),
+                            issues = issues,
+                            issuesVisible = false,
+                            sheet = null
+                        )
+                    }
+                    notifyIssues(issues)
                 }
 
-                is LoadOutcome.Error -> _state.update {
-                    it.copy(
-                        isLoading = false,
-                        fatalError = outcome.message,
-                        sheet = null
-                    )
+                is LoadOutcome.Error -> {
+                    val issues = listOf(outcome.message)
+                    _state.update {
+                        it.copy(
+                            isLoading = false,
+                            fatalError = outcome.message,
+                            issues = issues,
+                            issuesVisible = false,
+                            sheet = null
+                        )
+                    }
+                    notifyIssues(issues)
                 }
             }
         }
     }
 
-    private fun applyLoaded(outcome: LoadOutcome.Success) {
+    private fun applyLoaded(outcome: LoadOutcome.Success): List<String> {
         val issues = outcome.issues + PointValidator.validate(outcome.points)
         _state.update {
             it.copy(
@@ -204,11 +253,13 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
                 missing = null,
                 fatalError = null,
                 issues = issues,
+                issuesVisible = false,
                 sheet = if (it.sheet is PointSheetState.Editor) it.sheet else null,
                 deleteTarget = null,
                 isSaving = false
             )
         }
+        return issues
     }
 
     fun selectPoint(point: Point) {
@@ -275,50 +326,36 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
         val editor = current.sheet as? PointSheetState.Editor ?: return
         val draft = editor.draft
 
-        val errors = mutableListOf<String>()
+        val formIssues = mutableListOf<String>()
         val code = draft.code.trim()
         val name = draft.name.trim()
         val district = draft.district.trim()
 
-        if (code.isEmpty()) errors += "Ошибка: поле «Код» не заполнено."
-        if (name.isEmpty()) errors += "Ошибка: поле «Название» не заполнено."
-        if (district.isEmpty()) errors += "Ошибка: поле «Район» не заполнено."
-        if (draft.type !in POINT_TYPES) errors += "Ошибка: выберите тип РП или ТП."
-        if (draft.ownership !in OWNERSHIP_OPTIONS) {
-            errors += "Ошибка: выберите принадлежность РОССЕТИ или ССК."
+        val type = draft.type.takeIf { it in POINT_TYPES } ?: "рп".also {
+            formIssues += "Неизвестный тип «${draft.type}» заменён на РП."
         }
-        if (!PointColors.isValid(draft.iconColor)) {
-            errors += "Ошибка: выберите цвет иконки."
+        val ownership = draft.ownership.takeIf { it in OWNERSHIP_OPTIONS } ?: "РОССЕТИ".also {
+            formIssues += "Неизвестная принадлежность «${draft.ownership}» заменена на РОССЕТИ."
         }
+        val iconColor = draft.iconColor
+            .takeIf { PointColors.isValid(it) }
+            ?: PointColors.defaultFor(type).also {
+                formIssues += "Неизвестный цвет иконки заменён на стандартный."
+            }
 
-        val latitude = parseCoordinate(draft.latitude)
-        val longitude = parseCoordinate(draft.longitude)
-        if (latitude == null) {
-            errors += "Ошибка: широта должна быть числом."
-        } else if (latitude !in -90.0..90.0) {
-            errors += "Ошибка: широта должна быть от -90 до 90."
-        }
-        if (longitude == null) {
-            errors += "Ошибка: долгота должна быть числом."
-        } else if (longitude !in -180.0..180.0) {
-            errors += "Ошибка: долгота должна быть от -180 до 180."
-        }
-
-        if (errors.isNotEmpty()) {
-            _state.update { it.copy(issues = errors) }
-            return
-        }
+        val latitude = parseCoordinateOrZero(draft.latitude, "Широта", formIssues)
+        val longitude = parseCoordinateOrZero(draft.longitude, "Долгота", formIssues)
 
         val point = Point(
             code = code,
-            type = draft.type,
+            type = type,
             name = name,
             district = district,
-            latitude = latitude ?: 0.0,
-            longitude = longitude ?: 0.0,
+            latitude = latitude,
+            longitude = longitude,
             note = draft.note.trim().ifBlank { null },
-            ownership = draft.ownership,
-            iconColor = draft.iconColor,
+            ownership = ownership,
+            iconColor = iconColor,
             id = draft.originalId ?: UUID.randomUUID().toString()
         )
 
@@ -331,10 +368,7 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         val validation = PointValidator.validate(candidate)
-        if (validation.isNotEmpty()) {
-            _state.update { it.copy(issues = validation) }
-            return
-        }
+        val issues = (formIssues + validation).distinct()
 
         viewModelScope.launch {
             _state.update { it.copy(isSaving = true) }
@@ -345,10 +379,10 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
                         notesRepository.moveNote(originalPoint.noteKey, point.noteKey)
                     }
                 }
-                val message = if (draft.originalId == null) {
-                    "Точка добавлена"
-                } else {
+                val baseMessage = if (exists) {
                     "Изменения сохранены"
+                } else {
+                    "Точка добавлена"
                 }
                 _state.update { state ->
                     val stillEditing = state.sheet is PointSheetState.Editor
@@ -358,7 +392,8 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
                         source = PointsSource.EXTERNAL,
                         missing = null,
                         fatalError = null,
-                        issues = emptyList(),
+                        issues = issues,
+                        issuesVisible = false,
                         sheet = if (stillEditing) {
                             PointSheetState.Details(point.id)
                         } else {
@@ -366,20 +401,46 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
                         }
                     )
                 }
-                _messages.trySend(message)
+                if (issues.isEmpty()) {
+                    sendMessage(baseMessage)
+                } else {
+                    sendMessage(
+                        "$baseMessage. Замечаний: ${issues.size}",
+                        showIssuesAction = true
+                    )
+                }
             } else {
+                val technical = "Не удалось сохранить points.json: " +
+                    (result.exceptionOrNull()?.message ?: "неизвестная ошибка")
+                val allIssues = (issues + technical).distinct()
                 _state.update {
                     it.copy(
                         isSaving = false,
-                        issues = listOf(
-                            "Не удалось сохранить points.json: " +
-                                (result.exceptionOrNull()?.message
-                                    ?: "неизвестная ошибка")
-                        )
+                        issues = allIssues,
+                        issuesVisible = false
                     )
                 }
+                sendMessage("Не удалось сохранить points.json", true)
             }
         }
+    }
+
+    private fun parseCoordinateOrZero(
+        raw: String,
+        label: String,
+        issues: MutableList<String>
+    ): Double {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) {
+            issues += "$label не заполнена — сохранено 0.0."
+            return 0.0
+        }
+        val value = trimmed.replace(',', '.').toDoubleOrNull()
+        if (value == null || !value.isFinite()) {
+            issues += "$label «$trimmed» не число — сохранено 0.0."
+            return 0.0
+        }
+        return value
     }
 
     fun requestDelete(point: Point) {
@@ -394,17 +455,7 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
         if (_state.value.isSaving) return
         val target = _state.value.deleteTarget ?: return
         val candidate = _state.value.points.filterNot { it.id == target.id }
-        val validation = PointValidator.validate(candidate)
-
-        if (validation.isNotEmpty()) {
-            _state.update {
-                it.copy(
-                    deleteTarget = null,
-                    issues = validation
-                )
-            }
-            return
-        }
+        val issues = PointValidator.validate(candidate)
 
         _state.update { it.copy(deleteTarget = null, isSaving = true) }
         viewModelScope.launch {
@@ -418,21 +469,31 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
                         source = PointsSource.EXTERNAL,
                         missing = null,
                         fatalError = null,
+                        issues = issues,
+                        issuesVisible = false,
                         sheet = null
                     )
                 }
-                _messages.trySend("Точка удалена")
+                if (issues.isEmpty()) {
+                    sendMessage("Точка удалена")
+                } else {
+                    sendMessage(
+                        "Точка удалена. Замечаний: ${issues.size}",
+                        showIssuesAction = true
+                    )
+                }
             } else {
+                val technical = "Не удалось удалить точку: " +
+                    (result.exceptionOrNull()?.message ?: "неизвестная ошибка")
+                val allIssues = (issues + technical).distinct()
                 _state.update {
                     it.copy(
                         isSaving = false,
-                        issues = listOf(
-                            "Не удалось удалить точку: " +
-                                (result.exceptionOrNull()?.message
-                                    ?: "неизвестная ошибка")
-                        )
+                        issues = allIssues,
+                        issuesVisible = false
                     )
                 }
+                sendMessage("Не удалось удалить точку", true)
             }
         }
     }
@@ -447,12 +508,16 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
             if (parsed == null) {
                 val message = parsedResult.exceptionOrNull()?.message
                     ?: "Не удалось прочитать файл."
+                val currentIssues = _state.value.issues
+                val issues = (currentIssues + "Импорт: $message").distinct()
                 _state.update {
                     it.copy(
                         isSaving = false,
-                        issues = listOf("Ошибка импорта: $message")
+                        issues = issues,
+                        issuesVisible = false
                     )
                 }
+                notifyIssues(issues, prefix = "Импорт не выполнен")
                 return@launch
             }
 
@@ -460,18 +525,9 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
                 addAll(parsed.issues)
                 addAll(PointValidator.validate(parsed.points))
                 if (parsed.points.isEmpty()) {
-                    add("Ошибка: в файле нет точек.")
+                    add("В файле нет точек.")
                 }
-            }
-            if (issues.isNotEmpty()) {
-                _state.update {
-                    it.copy(
-                        isSaving = false,
-                        issues = issues
-                    )
-                }
-                return@launch
-            }
+            }.distinct()
 
             val result = repository.save(parsed.points)
             if (result.isSuccess) {
@@ -482,23 +538,33 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
                         source = PointsSource.EXTERNAL,
                         missing = null,
                         fatalError = null,
-                        issues = emptyList(),
+                        issues = issues,
+                        issuesVisible = false,
                         sheet = null,
                         deleteTarget = null
                     )
                 }
-                _messages.trySend("Импортировано точек: ${parsed.points.size}")
+                if (issues.isEmpty()) {
+                    sendMessage("Импортировано точек: ${parsed.points.size}")
+                } else {
+                    sendMessage(
+                        "Импортировано точек: ${parsed.points.size}. " +
+                            "Замечаний: ${issues.size}",
+                        showIssuesAction = true
+                    )
+                }
             } else {
+                val technical = "Не удалось сохранить импорт: " +
+                    (result.exceptionOrNull()?.message ?: "неизвестная ошибка")
+                val allIssues = (_state.value.issues + issues + technical).distinct()
                 _state.update {
                     it.copy(
                         isSaving = false,
-                        issues = listOf(
-                            "Не удалось сохранить импорт: " +
-                                (result.exceptionOrNull()?.message
-                                    ?: "неизвестная ошибка")
-                        )
+                        issues = allIssues,
+                        issuesVisible = false
                     )
                 }
+                sendMessage("Не удалось сохранить импорт", true)
             }
         }
     }
@@ -506,29 +572,33 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
     fun exportPoints(uri: Uri) {
         if (_state.value.isSaving) return
         val points = _state.value.points
-        val validation = PointValidator.validate(points)
-        if (validation.isNotEmpty()) {
-            _state.update { it.copy(issues = validation) }
-            return
-        }
+        val currentIssues = _state.value.issues
 
         viewModelScope.launch {
             _state.update { it.copy(isSaving = true) }
             val result = repository.export(points, uri)
             if (result.isSuccess) {
                 _state.update { it.copy(isSaving = false) }
-                _messages.trySend("Файл сохранён")
+                if (currentIssues.isEmpty()) {
+                    sendMessage("Файл сохранён")
+                } else {
+                    sendMessage(
+                        "Файл сохранён. Замечаний: ${currentIssues.size}",
+                        showIssuesAction = true
+                    )
+                }
             } else {
+                val technical = "Не удалось сохранить файл: " +
+                    (result.exceptionOrNull()?.message ?: "неизвестная ошибка")
+                val allIssues = (currentIssues + technical).distinct()
                 _state.update {
                     it.copy(
                         isSaving = false,
-                        issues = listOf(
-                            "Не удалось сохранить файл: " +
-                                (result.exceptionOrNull()?.message
-                                    ?: "неизвестная ошибка")
-                        )
+                        issues = allIssues,
+                        issuesVisible = false
                     )
                 }
+                sendMessage("Не удалось сохранить файл", true)
             }
         }
     }
@@ -537,13 +607,13 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             try {
                 notesRepository.saveNote(point.noteKey, text)
-                _messages.trySend(
+                sendMessage(
                     if (text.isBlank()) "Заметка удалена" else "Заметка сохранена"
                 )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _messages.trySend("Не удалось сохранить заметку")
+                sendMessage("Не удалось сохранить заметку")
             }
         }
     }
@@ -552,11 +622,11 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             try {
                 notesRepository.deleteNote(point.noteKey)
-                _messages.trySend("Заметка удалена")
+                sendMessage("Заметка удалена")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _messages.trySend("Не удалось удалить заметку")
+                sendMessage("Не удалось удалить заметку")
             }
         }
     }
@@ -564,7 +634,7 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
     fun updateLocationFromGps() {
         if (_state.value.isSaving || _state.value.isLocating) return
         if (!locationProvider.hasPermission()) {
-            _messages.trySend("Нет разрешения на геолокацию")
+            sendMessage("Нет разрешения на геолокацию")
             return
         }
 
@@ -596,9 +666,9 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
             }
 
             if (location != null) {
-                _messages.trySend("Координаты получены")
+                sendMessage("Координаты получены")
             } else {
-                _messages.trySend(
+                sendMessage(
                     "Не удалось определить координаты. Проверьте GPS и разрешение."
                 )
             }
@@ -606,19 +676,22 @@ class PointFinderViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun onLocationPermissionDenied() {
-        _messages.trySend("Разрешение на геолокацию не выдано")
+        sendMessage("Разрешение на геолокацию не выдано")
     }
 
     fun showMessage(text: String) {
-        _messages.trySend(text)
+        sendMessage(text)
     }
 
     fun dataDirectoryPath(): String = repository.dataDirectory().absolutePath
 
-    fun dismissIssues() {
-        _state.update { it.copy(issues = emptyList()) }
+    fun openIssues() {
+        _state.update { state ->
+            if (state.issues.isEmpty()) state else state.copy(issuesVisible = true)
+        }
     }
 
-    private fun parseCoordinate(raw: String): Double? =
-        raw.trim().replace(',', '.').toDoubleOrNull()
+    fun dismissIssues() {
+        _state.update { it.copy(issuesVisible = false) }
+    }
 }

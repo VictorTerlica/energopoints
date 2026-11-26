@@ -16,7 +16,7 @@ import java.util.Locale
 import java.util.UUID
 
 /** Допустимые типы точек (в JSON — строчными буквами). */
-val POINT_TYPES: List<String> = listOf("рп", "тп")
+val POINT_TYPES: List<String> = listOf("рп", "тп", "пс")
 
 /** Принадлежность, которую можно выбрать в форме. */
 val OWNERSHIP_OPTIONS: List<String> = listOf("РОССЕТИ", "ССК")
@@ -37,7 +37,11 @@ object PointColors {
 
     val palette: List<String> = listOf(BLUE, GREEN, ORANGE, PURPLE, TEAL, RED)
 
-    fun defaultFor(type: String): String = if (type == "тп") ORANGE else BLUE
+    fun defaultFor(type: String): String = when (type) {
+        "тп" -> ORANGE
+        "пс" -> PURPLE
+        else -> BLUE
+    }
 
     fun isValid(color: String?): Boolean {
         val candidate = color?.trim() ?: return false
@@ -83,6 +87,7 @@ data class Point(
         get() = when (type) {
             "рп" -> "РП"
             "тп" -> "ТП"
+            "пс" -> "ПС"
             else -> type.uppercase(Locale.ROOT).ifBlank { "—" }
         }
 

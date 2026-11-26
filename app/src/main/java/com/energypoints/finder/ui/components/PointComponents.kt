@@ -244,13 +244,20 @@ fun IssuesDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Default.Warning, contentDescription = null) },
-        title = { Text("Ошибка данных") },
+        title = { Text("Проверка данных") },
         text = {
             Column(
                 modifier = Modifier
                     .heightIn(max = 420.dp)
                     .verticalScroll(rememberScrollState())
             ) {
+                Text(
+                    text = "Это информационные замечания. Они не блокируют " +
+                        "импорт и сохранение.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
                 issues.forEach { issue ->
                     Row(
                         modifier = Modifier.padding(vertical = 4.dp),
